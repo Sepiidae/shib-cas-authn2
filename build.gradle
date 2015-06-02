@@ -9,6 +9,7 @@ allprojects {
     version = project.version
 
     repositories {
+        mavenLocal()
         mavenCentral()
         maven {url "https://build.shibboleth.net/nexus/content/repositories/releases" }
         maven { url "https://build.shibboleth.net/nexus/content/repositories/thirdparty" }
