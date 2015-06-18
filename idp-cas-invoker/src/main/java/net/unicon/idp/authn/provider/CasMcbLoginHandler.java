@@ -72,85 +72,28 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
     private String idpProtocol = "https";
     private String idpServer;
     private String idpPrefix = "/idp";
-    private String idpCallback = "/Authn/Cas";
+    private String idpCallback = "/Authn/MCB/RemoteUser";
     private String propertiesFile = DEFAULT_CAS_SHIB_PROPS;
     private Set<IParameterBuilder> parameterBuilders = new HashSet<IParameterBuilder>();
+    private Properties props;
+
+    public static final String AUTHN_TYPE = "authnType";
+    private static final String DEFAULT_CAS_SHIB_PROPS = "/opt/shibboleth-idp/conf/cas-shib.properties";
+    private static final long serialVersionUID = 1L;
+    private String artifactParameterName = "ticket";
+
+    private String casToShibTranslatorNames;
+    private String serverName;
+    private Cas20ServiceTicketValidator ticketValidator;
+    private Set<CasToShibTranslator> translators = new HashSet<CasToShibTranslator>();
 
     {
         // By default, we start with the entity id param builder included
         parameterBuilders.add(new EntityIdParameterBuilder());
     }
 
-    /**
-     * Create a new instance of the login handler. Read the configuration
-     * properties from the properties file indicated as a construction argument.
-     *
-     * @param propertiesFile File and path name to the file containing the
-     * required properties:
-     * <li>cas.server
-     * <li>idp.server
-     * @throws FileNotFoundException
-     */
-    public CasMcbLoginHandler(final String propertiesFile, final String paramBuilderNames) throws FileNotFoundException {
-        this(new FileReader(new File(propertiesFile)), propertiesFile, paramBuilderNames);
-    }
+    public CasMcbLoginHandler() {
 
-    /**
-     * Construct a new instance using the supplied parameters.
-     *
-     * @param propertiesFileReader The reader to the properties file
-     * @param propertiesFile The name of the properties file (used for logging
-     * and error messages)
-     * @param paramBuilderNames The list of parameter builder names
-     */
-    public CasMcbLoginHandler(final Reader propertiesFileReader, final String propertiesFile, final String paramBuilderNames) {
-        Properties props = new Properties();
-        try {
-            if (null == propertiesFileReader) {
-                throw new FileNotFoundException("Error reading properties file: " + propertiesFile);
-            }
-            try {
-                props.load(propertiesFileReader);
-                propertiesFileReader.close();
-            } catch (final IOException e) {
-                LOGGER.debug("Error reading properties file: {}", propertiesFile);
-                throw e;
-            }
-            String temp = getProperty("cas.server.protocol");
-            casProtocol = StringUtils.isEmpty(temp) ? casProtocol : temp;
-            temp = getProperty("cas.application.prefix");
-            casPrefix = StringUtils.isEmpty(temp) ? casPrefix : temp;
-            temp = getProperty("cas.server");
-            casServer = StringUtils.isEmpty(temp) ? casServer : temp;
-            casLoginUrl = casProtocol + "://" + casServer + casPrefix + LOGIN;
-
-            temp = getProperty("idp.server.protocol");
-            idpProtocol = StringUtils.isEmpty(temp) ? idpProtocol : temp;
-            temp = getProperty("idp.server");
-            idpServer = StringUtils.isEmpty(temp) ? idpServer : temp;
-            temp = getProperty("idp.application.prefix");
-            idpPrefix = StringUtils.isEmpty(temp) ? idpPrefix : temp;
-            temp = getProperty("idp.server.callback");
-            idpCallback = StringUtils.isEmpty(temp) ? idpCallback : temp;
-            callbackUrl = idpProtocol + "://" + idpServer + idpPrefix + idpCallback;
-        } catch (final Exception e) {
-            LOGGER.error("Unable to load parameters", e);
-            throw new RuntimeException(e);
-        }
-
-        if (StringUtils.isEmpty(casServer)) {
-            LOGGER.error(MISSING_CONFIG_MSG, "cas.server", propertiesFile);
-            throw new IllegalArgumentException(
-                    "CasLoginHandler missing properties needed to build the cas login URL in handler configuration.");
-        }
-        if (null == idpServer || "".equals(idpServer.trim())) {
-            LOGGER.error(MISSING_CONFIG_MSG, "idp.server", propertiesFile);
-            throw new IllegalArgumentException(
-                    "CasLoginHandler missing properties needed to build the callback URL in handler configuration.");
-        }
-        setSupportsForceAuthentication(true);
-        setSupportsPassive(true);
-        createParamBuilders(paramBuilderNames);
     }
 
     /**
@@ -231,6 +174,7 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
             loginString.append(additionalParams);
             loginString.append(StringUtils.endsWith(loginString.toString(), "?") ? "service=" : "&service=");
             loginString.append(callbackUrl);
+            LOGGER.error(loginString.toString());
             response.sendRedirect(response.encodeRedirectURL(loginString.toString()));
         } catch (final IOException e) {
             LOGGER.error("Unable to redirect to CAS from LoginHandler", e);
@@ -255,13 +199,14 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
             assertion = ticketValidator.validate(ticket, constructServiceUrl(request, response));
 
         } catch (final TicketValidationException e) {
-            logger.error("Unable to validate login attempt.", e);
+            LOGGER.error("Unable to validate login attempt.", e);
             boolean wasPassiveAttempt = null != authnType && authnType.toString().contains("&gateway=true");
             // If it was a passive attempt, send back the indicator that the responding provider cannot authenticate 
             // the principal passively, as has been requested. Otherwise, send the generic authn failed code.
             request.setAttribute(LoginHandler.AUTHENTICATION_ERROR_KEY, wasPassiveAttempt ? StatusCode.NO_PASSIVE_URI
                     : StatusCode.AUTHN_FAILED_URI);
             // AuthenticationEngine.returnToAuthenticationEngine(request, response);
+
             return false;
         }
 
@@ -279,6 +224,7 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
                 return true;
             } else {
                 log.debug("No remote user identified by protected servlet.");
+                return false;
             }
         } catch (Exception e) {
             principal.setFailedLogin(e.getMessage());
@@ -286,7 +232,6 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
         }
 
         // AuthenticationEngine.returnToAuthenticationEngine(request, response);        
-        return true;
 
     }
 
@@ -312,17 +257,6 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
         this.beanName = beanName;
     }
 
-    public static final String AUTHN_TYPE = "authnType";
-    private static final String DEFAULT_CAS_SHIB_PROPS = "/opt/shibboleth-idp/conf/cas-shib.properties";
-    private static final long serialVersionUID = 1L;
-    private String artifactParameterName = "ticket";
-
-    private String casToShibTranslatorNames;
-    private Logger logger = LoggerFactory.getLogger(CasCallbackServlet.class);
-    private String serverName;
-    private Cas20ServiceTicketValidator ticketValidator;
-    private Set<CasToShibTranslator> translators = new HashSet<CasToShibTranslator>();
-
     /**
      * Attempt to build the set of translators from the fully qualified class
      * names set in the properties. If nothing has been set then default to the
@@ -337,7 +271,7 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
                 CasToShibTranslator casToShibTranslator = (CasToShibTranslator) cons.newInstance();
                 translators.add(casToShibTranslator);
             } catch (Exception e) {
-                logger.error("Error building cas to shib translator with name: " + classname, e);
+                LOGGER.error("Error building cas to shib translator with name: " + classname, e);
             }
         }
     }
@@ -349,8 +283,6 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
         return CommonUtils.constructServiceUrl(request, response, null, serverName, artifactParameterName, true);
     }
 
-    Properties props;
-
     /**
      * Check for the externalized properties first. If this hasn't been set, go
      * with the default filename/path If we are unable to load the parameters,
@@ -361,29 +293,20 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
      * @throws ServletException
      */
     private void parseProperties() throws ServletException {
-        String casUrlPrefix = null;
-        String artifactParamaterName = null;
-
-        String fileName = this.propertiesFile;
-        if (null == fileName || "".equals(fileName.trim())) {
-            logger.debug("propertiesFile init-param not set, defaulting to " + DEFAULT_CAS_SHIB_PROPS);
-            fileName = DEFAULT_CAS_SHIB_PROPS;
-        }
-
-        props = new Properties();
+        FileReader reader = null;
         try {
-            try {
-                FileReader reader = new FileReader(new File(fileName));
-                props.load(reader);
-                reader.close();
-            } catch (final FileNotFoundException e) {
-                logger.debug("Unable to locate file: " + fileName);
-                throw e;
-            } catch (final IOException e) {
-                logger.debug("Error reading file: " + fileName);
-                throw e;
+            String casUrlPrefix = null;
+            String artifactParamaterName = null;
+            String fileName = this.propertiesFile;
+            if (null == fileName || "".equals(fileName.trim())) {
+                LOGGER.debug("propertiesFile init-param not set, defaulting to " + DEFAULT_CAS_SHIB_PROPS);
+                fileName = DEFAULT_CAS_SHIB_PROPS;
             }
-            logger.debug("Attempting to load parameters from properties file");
+            props = new Properties();
+            reader = new FileReader(new File(fileName));
+            props.load(reader);
+            reader.close();
+            LOGGER.debug("Attempting to load parameters from properties file");
             String temp = getProperty("cas.server.protocol");
             casProtocol = StringUtils.isEmpty(temp) ? casProtocol : temp;
             temp = getProperty("cas.application.prefix");
@@ -396,38 +319,54 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
             idpServer = StringUtils.isEmpty(temp) ? idpServer : temp;
             artifactParamaterName = getProperty("artifact.parameter.name");
             casToShibTranslatorNames = getProperty("casToShibTranslators");
-        } catch (final Exception e) {
-            logger.debug("Error reading properties, attempting to load parameters from servlet init-params");
-            String temp = getProperty("cas.server.protocol");
-            casProtocol = StringUtils.isEmpty(temp) ? casProtocol : temp;
-            temp = getProperty("cas.application.prefix");
-            casPrefix = StringUtils.isEmpty(temp) ? casPrefix : temp;
-            temp = getProperty("cas.server");
-            casServer = StringUtils.isEmpty(temp) ? casServer : temp;
-            temp = getProperty("idp.server.protocol");
-            idpProtocol = StringUtils.isEmpty(temp) ? idpProtocol : temp;
-            temp = getProperty("idp.server");
-            idpServer = StringUtils.isEmpty(temp) ? idpServer : temp;
-            artifactParamaterName = getProperty("artifact.parameter.name");
-            casToShibTranslatorNames = getProperty("casToShibTranslators");
-        }
 
-        if (StringUtils.isEmpty(casServer)) {
-            logger.error("Unable to start CasCallbackServlet. Verify that the IDP's web.xml file OR the external property is configured properly.");
-            throw new ServletException(
-                    "Missing casServer parameter to build the cas server URL - this is a required value");
-        }
-        casUrlPrefix = casProtocol + "://" + casServer + casPrefix;
-        ticketValidator = new Cas20ServiceTicketValidator(casUrlPrefix);
+            casLoginUrl = casProtocol + "://" + casServer + casPrefix + LOGIN;
 
-        if (StringUtils.isEmpty(idpServer)) {
-            logger.error("Unable to start CasCallbackServlet. Verify that the IDP's web.xml file OR the external property is configured properly.");
-            throw new ServletException(
-                    "Missing idpServer parameter to build the idp server URL - this is a required value");
+            temp = getProperty("idp.application.prefix");
+            idpPrefix = StringUtils.isEmpty(temp) ? idpPrefix : temp;
+            temp = getProperty("idp.server.callback");
+            idpCallback = StringUtils.isEmpty(temp) ? idpCallback : temp;
+            callbackUrl = idpProtocol + "://" + idpServer + idpPrefix + idpCallback;
+
+            if (StringUtils.isEmpty(casServer)) {
+                LOGGER.error(MISSING_CONFIG_MSG, "cas.server", propertiesFile);
+                throw new IllegalArgumentException(
+                        "CasLoginHandler missing properties needed to build the cas login URL in handler configuration.");
+            }
+            if (null == idpServer || "".equals(idpServer.trim())) {
+                LOGGER.error(MISSING_CONFIG_MSG, "idp.server", propertiesFile);
+                throw new IllegalArgumentException(
+                        "CasLoginHandler missing properties needed to build the callback URL in handler configuration.");
+            }
+            setSupportsForceAuthentication(true);
+            setSupportsPassive(true);
+
+            if (StringUtils.isEmpty(casServer)) {
+                LOGGER.error("Unable to start CasCallbackServlet. Verify that the IDP's web.xml file OR the external property is configured properly.");
+                throw new ServletException(
+                        "Missing casServer parameter to build the cas server URL - this is a required value");
+            }
+            casUrlPrefix = casProtocol + "://" + casServer + casPrefix;
+            ticketValidator = new Cas20ServiceTicketValidator(casUrlPrefix);
+            if (StringUtils.isEmpty(idpServer)) {
+                LOGGER.error("Unable to start CasCallbackServlet. Verify that the IDP's web.xml file OR the external property is configured properly.");
+                throw new ServletException(
+                        "Missing idpServer parameter to build the idp server URL - this is a required value");
+            }
+            serverName = idpProtocol + "://" + idpServer;
+            artifactParameterName = (StringUtils.isEmpty(artifactParamaterName) || "null".equals(artifactParamaterName)) ? "ticket"
+                    : artifactParamaterName;
+        } catch (FileNotFoundException ex) {
+            java.util.logging.Logger.getLogger(CasMcbLoginHandler.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (IOException ex) {
+            java.util.logging.Logger.getLogger(CasMcbLoginHandler.class.getName()).log(Level.SEVERE, null, ex);
+        } finally {
+            try {
+                reader.close();
+            } catch (IOException ex) {
+                java.util.logging.Logger.getLogger(CasMcbLoginHandler.class.getName()).log(Level.SEVERE, null, ex);
+            }
         }
-        serverName = idpProtocol + "://" + idpServer;
-        artifactParameterName = (StringUtils.isEmpty(artifactParamaterName) || "null".equals(artifactParamaterName)) ? "ticket"
-                : artifactParamaterName;
     }
 
     public String getCallbackUrl() {
@@ -524,14 +463,6 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
 
     public void setCasToShibTranslatorNames(String casToShibTranslatorNames) {
         this.casToShibTranslatorNames = casToShibTranslatorNames;
-    }
-
-    public Logger getLogger() {
-        return logger;
-    }
-
-    public void setLogger(Logger logger) {
-        this.logger = logger;
     }
 
     public String getServerName() {
