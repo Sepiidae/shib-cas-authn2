@@ -67,7 +67,7 @@ public class CasMcbLoginHandler extends AbstractLoginHandler implements MCBSubmo
     private String callbackUrl;
     private String casLoginUrl;
     private String casProtocol = "https";
-    private String casPrefix = "/cas";
+    private String casPrefix = "";
     private String casServer;
     private String idpProtocol = "https";
     private String idpServer;
